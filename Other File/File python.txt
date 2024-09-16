@@ -1,0 +1,75 @@
+import requests
+import mysql.connector
+from datetime import datetime
+import time
+import pytz
+
+# Thay thế 'your_channel_id' bằng ID thực của kênh Thingspeak của bạn
+channel_url = "https://api.thingspeak.com/channels/2258169/feeds.json"
+
+# Thông tin kết nối MySQL
+host = "localhost"  # Địa chỉ máy chủ MySQL
+user = "root"  # Tên người dùng MySQL
+password = "thong2002"  # Mật khẩu MySQL
+database = "ESP_Data"  # Tên cơ sở dữ liệu MySQL
+
+# Thời gian giữa các lần lấy dữ liệu 
+update_interval = 300
+
+# Múi giờ của Thingspeak (UTC)
+thingspeak_tz = pytz.timezone('UTC')
+
+# Múi giờ GMT+7
+gmt7_tz = pytz.timezone('Asia/Bangkok')
+
+while True:
+    try:
+        # Lấy dữ liệu từ Thingspeak
+        response = requests.get(channel_url)
+
+        if response.status_code == 200:
+            data = response.json()
+            feeds = data.get('feeds', [])
+
+            if not feeds:
+                print("Không có dữ liệu trong trường 'feeds'")
+            else:
+                # Kết nối đến cơ sở dữ liệu MySQL
+                conn = mysql.connector.connect(host=host, user=user, password=password, database=database)
+                cursor = conn.cursor()
+
+                for feed in feeds:
+                    Temperature = feed.get('field1')
+                    Humidity = feed.get('field2')
+                    created_at = feed.get('created_at')  # Lấy thời gian từ Thingspeak
+
+                    if Temperature is not None and Humidity is not None and created_at is not None:
+                        # Chuyển đổi thời gian từ UTC sang GMT+7
+                        datetime_created_utc = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
+                        datetime_created_utc = thingspeak_tz.localize(datetime_created_utc)
+                        datetime_created_gmt7 = datetime_created_utc.astimezone(gmt7_tz)
+
+                        # Định dạng đối tượng datetime thành chuỗi DATETIME phù hợp với MySQL
+                        formatted_datetime = datetime_created_gmt7.strftime("%Y-%m-%d %H:%M:%S")
+
+                        print(f"Nhiệt độ: {Temperature}°C, Độ ẩm: {Humidity}%, Thời gian: {formatted_datetime}")
+
+                        # Thực hiện truy vấn để chèn dữ liệu vào cơ sở dữ liệu
+                        insert_query = "INSERT INTO sensordata (Temperature, Humidity, DateTime) VALUES (%s, %s, %s)"
+                        cursor.execute(insert_query, (Temperature, Humidity, formatted_datetime))
+                        conn.commit()
+                    else:
+                        print("Dữ liệu không chứa trường nhiệt độ, độ ẩm hoặc thời gian")
+
+                # Đóng kết nối với cơ sở dữ liệu MySQL
+                cursor.close()
+                conn.close()
+        else:
+            print("Lỗi trong việc lấy dữ liệu từ Thingspeak")
+    except requests.exceptions.RequestException as e:
+        print("Lỗi kết nối Thingspeak: ", e)
+    except mysql.connector.Error as err:
+        print("Lỗi kết nối MySQL: ", err)
+
+    # Ngủ một khoảng thời gian trước khi lấy dữ liệu tiếp theo
+    time.sleep(update_interval)
